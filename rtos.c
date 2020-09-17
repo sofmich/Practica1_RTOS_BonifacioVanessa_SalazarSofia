@@ -108,11 +108,29 @@ rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 		rtos_autostart_e autostart)
 {
 
+	if(task_list.nTasks < RTOS_MAX_NUMBER_OF_TASKS)
+	{
+		if(kAutoStart == autoStart_flag) //DUDAS EN LA BANDERA, DE DONDE VIENE
+		{
+			task_body->state = S_READY;
+		}
+		else {
+			task_body->state = S_SUSPENDED;
+		}
+		task_body->sp = stack[RTOS_STACK_SIZE] ;
+
+		/*CUAL ES EL STACK FRAME INICIAL*/
+		task_body->localTick = 0;
+		//INDICE DE LA TAREA
+		return task_body;
+	}
+	return -1;
 }
 
 rtos_tick_t rtos_get_clock(void)
 {
-	return 0;
+
+	return task_list.global_tick;
 }
 
 void rtos_delay(rtos_tick_t ticks)
@@ -153,7 +171,18 @@ FORCE_INLINE static void context_switch(task_switch_type_e type)
 
 static void activate_waiting_tasks()
 {
-
+	uint8_t idx = 0;
+	for (idx = 0 ; idx < task_list.nTasks; idx++)
+	{
+		if(S_WAITING == task_list.tasks[idx].state)
+		{
+			task_list.tasks[idx].local_tick--;
+			if(0 == task_list.tasks[idx].local_tick)
+			{
+				task_list.tasks[idx].state = S_READY;
+			}
+		}
+	}
 }
 
 /**********************************************************************************/
@@ -178,7 +207,8 @@ void SysTick_Handler(void)
 	refresh_is_alive();
 #endif
 	activate_waiting_tasks();
-	reload_systick();
+	dispatcher(kFromISR);
+	//reload_systick();
 }
 
 void PendSV_Handler(void)
