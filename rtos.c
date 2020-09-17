@@ -110,19 +110,26 @@ rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 
 	if(task_list.nTasks < RTOS_MAX_NUMBER_OF_TASKS)
 	{
-		if(kAutoStart == autoStart_flag) //DUDAS EN LA BANDERA, DE DONDE VIENE
+
+		if(kAutoStart == autostart)
 		{
-			task_body->state = S_READY;
+			task_list.tasks[task_list.nTask].state = S_READY;
 		}
 		else {
-			task_body->state = S_SUSPENDED;
+			task_list.tasks[task_list.nTask].state = S_SUSPENDED;
 		}
-		task_body->sp = stack[RTOS_STACK_SIZE] ;
 
-		/*CUAL ES EL STACK FRAME INICIAL*/
-		task_body->localTick = 0;
-		//INDICE DE LA TAREA
-		return task_body;
+		task_list.tasks[task_list.nTask].task_body = task_body;
+
+		task_list.tasks[task_list.nTask].sp = &(task_list.tasks[task_list.nTask].stack[RTOS_STACK_SIZE - 1]) - STACK_FRAME_SIZE;
+		task_list.tasks[task_list.nTask].stack[RTOS_STACK_SIZE - STACK_PC_OFFSET] = (uint32_t) task_body;
+		task_list.tasks[task_list.nTask].stack[RTOS_STACK_SIZE - STACK_PSR_OFFSET] = (STACK_PSR_DEFAULT);
+
+		task_list.tasks[task_list.nTask].priority = priority;
+
+		task_list.tasks[task_list.nTask].local_tick = 0;
+		task_list.nTasks ++ ;
+		return task_list.nTasks;
 	}
 	return -1;
 }
@@ -135,7 +142,9 @@ rtos_tick_t rtos_get_clock(void)
 
 void rtos_delay(rtos_tick_t ticks)
 {
-
+	task_list.tasks[task_list.current_task].state = S_WAITING;
+	task_list.tasks[task_list.current_task].local_ticks = ticks;
+	dispatcher(kFromNormalExec);
 }
 
 void rtos_suspend_task(void)
@@ -161,12 +170,50 @@ static void reload_systick(void)
 
 static void dispatcher(task_switch_type_e type)
 {
+	rtos_task_handle_t next_task = task_list.nTasks;
+	uint8_t maxPrior = 0;//DEBE SER IGUAL A LA PRIORIDAD MINIMA
 
+	uint8_t idx = 0;
+	for (idx = 0 ; idx < task_list.nTasks; idx++)
+	{
+		if(task_list.tasks[idx].priority > maxPrior && S_RUNNING == task_list.tasks[idx].state  )
+		{
+			maxPrior = task_list.tasks[idx].priority;
+			next_task = idx;
+		}
+	}
+
+	if(next_task  != task_list.current_task)
+	{
+		context_switch(kFromNormalExec);
+	}
 }
 
 FORCE_INLINE static void context_switch(task_switch_type_e type)
 {
 
+	static uint8_t first = 1;
+	if(!first)
+	{
+		asm("mov r0, r7");
+		task_list.tasks[task_list.current_task].sp = (uint32_t*) r0;
+		if (type)
+		  {
+			task_list.tasks[task_list.current_task].sp -= (-7);
+			task_list.tasks[task_list.current_task].state = stateReady;
+		  }
+		  else
+		  {
+			task_list.tasks[task_list.current_task].sp -= (9);
+		  }
+	}
+	else
+	{
+		first = 0;
+	}
+	task_list.current_task = task_list.next_task;
+	task_list.tasks[task_list.current_task].state = S_RUNNING;
+	SCB -> ICSR |= SCB_ICSR_PENDSVSET_Msk;
 }
 
 static void activate_waiting_tasks()
@@ -206,6 +253,7 @@ void SysTick_Handler(void)
 #ifdef RTOS_ENABLE_IS_ALIVE
 	refresh_is_alive();
 #endif
+	task_list.global_tick ++;
 	activate_waiting_tasks();
 	dispatcher(kFromISR);
 	//reload_systick();
@@ -213,7 +261,11 @@ void SysTick_Handler(void)
 
 void PendSV_Handler(void)
 {
-
+	register int32_t r0 asm("r0");
+	(void) r0;
+	SCB->ICSR |= SCB_ICSR_PENDSVCLR_Msk;
+	r0 = (int32_t) task_list.tasks[task_list.current_task].sp;
+	asm("mov r7,r0");
 }
 
 /**********************************************************************************/
