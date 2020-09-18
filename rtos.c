@@ -98,14 +98,13 @@ void rtos_start_scheduler(void)
 	init_is_alive();
 #endif
 	task_list.global_tick = 0;
+	task_list.current_task = -1;
 
 	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk
 	        | SysTick_CTRL_ENABLE_Msk;
 	reload_systick();
 
 	rtos_create_task(idle_task, 0, kAutoStart);
-
-	NVIC_SetPriority(PendSV_IRQn, 0xFF);
 	for (;;)
 		;
 }
@@ -209,7 +208,7 @@ static void dispatcher(task_switch_type_e type)
 FORCE_INLINE static void context_switch(task_switch_type_e type)
 {
 	static uint8_t first = 1;
-	register uint32_t r0 asm("sp");
+	register uint32_t r0 asm("r0");
 
 	(void) r0;
 
@@ -217,14 +216,14 @@ FORCE_INLINE static void context_switch(task_switch_type_e type)
 	{
 		asm("mov r0, r7");
 		task_list.tasks[task_list.current_task].sp = (uint32_t*) r0;
-		if (kFromNormalExec == type)
+		if(kFromISR == type)
 		  {
-			task_list.tasks[task_list.current_task].sp -= (7);
-			//task_list.tasks[task_list.current_task].state = S_READY;
+			task_list.tasks[task_list.current_task].sp -= (-9);
+			task_list.tasks[task_list.current_task].state = S_READY;
 		  }
 		  else
 		  {
-			task_list.tasks[task_list.current_task].sp -= (-9);
+			task_list.tasks[task_list.current_task].sp -= (9);
 		  }
 	}
 	else
