@@ -97,10 +97,15 @@ void rtos_start_scheduler(void)
 #ifdef RTOS_ENABLE_IS_ALIVE
 	init_is_alive();
 #endif
+	task_list.global_tick = 0;
+
 	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk
 	        | SysTick_CTRL_ENABLE_Msk;
 	reload_systick();
+
 	rtos_create_task(idle_task, 0, kAutoStart);
+
+	NVIC_SetPriority(PendSV_IRQn, 0xFF);
 	for (;;)
 		;
 }
@@ -118,9 +123,7 @@ rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 		{
 			task_list.tasks[task_list.nTasks].state = S_SUSPENDED;
 		}
-
 		task_list.tasks[task_list.nTasks].task_body = task_body;
-
 		task_list.tasks[task_list.nTasks].sp = &(task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE - 1]) - STACK_FRAME_SIZE;
 		task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE - STACK_LR_OFFSET] = (uint32_t) task_body;
 		task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE - STACK_PSR_OFFSET] = (STACK_PSR_DEFAULT);
@@ -131,7 +134,7 @@ rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 
 		task_list.nTasks ++;
 
-		return task_list.nTasks;
+		return (task_list.nTasks - 1);
 	}
 	return -1;
 }
@@ -157,7 +160,7 @@ void rtos_suspend_task(void)
 
 void rtos_activate_task(rtos_task_handle_t task)
 {
-	task_list.tasks[task_list.current_task].state = S_READY;
+	task_list.tasks[task].state = S_READY;
 	dispatcher(kFromNormalExec);
 }
 
@@ -174,13 +177,13 @@ static void reload_systick(void)
 
 static void dispatcher(task_switch_type_e type)
 {
-	rtos_task_handle_t next_task = task_list.nTasks;
+	rtos_task_handle_t next_task = task_list.nTasks - 1;
 	uint8_t maxPrior = 0;
 	uint8_t idx = 0;
 
 	for(idx = 0 ; task_list.nTasks > idx; idx++)
 	{
-		if(maxPrior < task_list.tasks[idx].priority)
+		if(maxPrior > task_list.tasks[idx].priority)
 		{
 			maxPrior = task_list.tasks[idx].priority;
 		}
@@ -188,23 +191,25 @@ static void dispatcher(task_switch_type_e type)
 
 	for (idx = 0 ; task_list.nTasks > idx; idx++)
 	{
-		if(maxPrior > task_list.tasks[idx].priority && S_RUNNING == task_list.tasks[idx].state)
+		if(maxPrior < task_list.tasks[idx].priority
+				&& (S_RUNNING == task_list.tasks[idx].state || S_READY == task_list.tasks[idx].state))
 		{
 			maxPrior = task_list.tasks[idx].priority;
 			next_task = idx;
 		}
 	}
+	task_list.next_task = next_task;
 
-	if(next_task != task_list.current_task)
+	if(task_list.current_task != task_list.next_task)
 	{
-		context_switch(kFromNormalExec);
+		context_switch(type);
 	}
 }
 
 FORCE_INLINE static void context_switch(task_switch_type_e type)
 {
 	static uint8_t first = 1;
-	register uint32_t r0 asm("r0");
+	register uint32_t r0 asm("sp");
 
 	(void) r0;
 
@@ -212,14 +217,14 @@ FORCE_INLINE static void context_switch(task_switch_type_e type)
 	{
 		asm("mov r0, r7");
 		task_list.tasks[task_list.current_task].sp = (uint32_t*) r0;
-		if (type)
+		if (kFromNormalExec == type)
 		  {
-			task_list.tasks[task_list.current_task].sp -= (-7);
-			task_list.tasks[task_list.current_task].state = S_READY;
+			task_list.tasks[task_list.current_task].sp -= (7);
+			//task_list.tasks[task_list.current_task].state = S_READY;
 		  }
 		  else
 		  {
-			task_list.tasks[task_list.current_task].sp -= (9);
+			task_list.tasks[task_list.current_task].sp -= (-9);
 		  }
 	}
 	else
